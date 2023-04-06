@@ -1,0 +1,3 @@
+[submodule "third-party/xcdat"]
+	path = third-party/xcdat
+	url = git@github.com:ookiiwi/xcdat.git
