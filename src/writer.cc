@@ -453,9 +453,9 @@ int transform_input(const std::string &src, std::ostream &os, const parseState &
         assert(cnt == state.pos.size());
 
         os.write((char*)&cnt, sizeof cnt);
-        os.write((char*)state.ids.data(), cnt * sizeof state.ids[0]);
-        os.write((char*)state.pos.data(), cnt * sizeof state.pos[0]);
-        os.write((char*)state.cluster_offset_idx.data(), cnt * sizeof state.cluster_offset_idx[0]);
+        os.write((char*)state.ids.data(), cnt * sizeof state.ids[0]); // TODO: compress (delta + elias fano)
+        os.write((char*)state.pos.data(), cnt * sizeof state.pos[0]); // TODO: compress
+        os.write((char*)state.cluster_offset_idx.data(), cnt * sizeof state.cluster_offset_idx[0]); // TODO: compress
 
         // id mapping
         {
@@ -511,7 +511,9 @@ int save_alphabets(std::ostream &os) {
     return 0;
 }
 
-int ctq_write(const std::string &src, const std::string &dst, const std::vector<std::string> &paths, uint16_t cluster_size) {
+namespace CTQ {
+
+int write(const std::string &src, const std::string &dst, const std::vector<std::string> &paths, uint16_t cluster_size) {
     std::ofstream output;
 
     if (!output) {
@@ -533,4 +535,6 @@ int ctq_write(const std::string &src, const std::string &dst, const std::vector<
     output.close();
     
     return 0;
+}
+
 }
