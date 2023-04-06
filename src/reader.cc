@@ -152,7 +152,7 @@ std::map<std::string, std::vector<uint64_t>> Reader::find(const std::string &key
         std::string key = it.decoded();
         uint64_t id = it.id();
     
-        if (count && i > count) break;
+        if (count && ret.size() >= count) break;
         if (i++ < offset) continue; 
 
         if (exact_match && key != keyword) 
