@@ -25,7 +25,7 @@ TEST_CASE("simple") {
         "/entry/sense/cit/quote",   // don't find
     };
 
-    ctq_write(input_filename, output_filename, paths);
+    CTQ::write(input_filename, output_filename, paths);
 
     CTQ::Reader reader(output_filename);
 
@@ -55,6 +55,17 @@ TEST_CASE("simple") {
             REQUIRE(find_quote.size() == 0);
         }
 
+
         ++i;
+    }
+
+    // range for "pleasant (fragrance)" and "plump"
+    {
+        auto find1 = reader.find("p", false, 0, 1);
+        auto find2 = reader.find("p", false, 1, 1);
+
+        REQUIRE(find1.size() == 1);
+        REQUIRE(find2.size() == 1);
+        REQUIRE(find1.begin()->first != find2.begin()->first);
     }
 }
