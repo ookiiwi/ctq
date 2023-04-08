@@ -2,7 +2,11 @@ cmake_minimum_required(VERSION 3.0.0)
 
 project(CTQ)
 
-option(CTQ_WRITER "Build writer" OFF)
+set(CMAKE_CXX_STANDARD 17)
+
+option(BUILD_CTQ_WRITER "Build writer" OFF)
+option(BUILD_CTQ_READER "Build reader" ON)
+option(BUILD_CTQ_CLI "CLI for writer and reader" OFF)
 option(BUILD_TESTING "Build tester" OFF)
 
 find_package(LibXml2)
@@ -11,16 +15,71 @@ find_library(LZ4_LIBRARY NAMES lz4)
 
 include_directories(include/)
 include_directories(third-party/xcdat/include)
-include_directories(${LZ4_INCLUDE_DIR})
-link_libraries(${LZ4_LIBRARY})
 
-if (CTQ_WRITER OR BUILD_TESTING)
-    add_library(ctq-writer src/writer.cc)
-    target_link_libraries(ctq-writer PUBLIC LibXml2::LibXml2)
+set(BUILD_SHARED_LIBS_SAVED "${BUILD_SHARED_LIBS}")
+set(BUILD_SHARED_LIBS OFF)
+
+if (LZ4_INCLUDE_DIR AND LZ4_LIBRARY)
+    include_directories(${LZ4_INCLUDE_DIR})
+    link_libraries(${LZ4_LIBRARY})
+else()
+    message("Not found")
+    set(LZ4_BUILD_CLI OFF)
+    set(LZ4_BUILD_LEGACY_LZ4C OFF)
+    add_subdirectory(third-party/lz4/build/cmake)
+    link_libraries(lz4_static)
 endif()
 
-if (NOT CTQ_WRITER OR BUILD_TESTING)
-    add_library(ctq-reader src/reader.cc)
+set(BUILD_SHARED_LIBS "${BUILD_SHARED_LIBS_SAVED}")
+
+if (BUILD_CLI)
+    set(BUILD_CTQ_READER ON)
+    set(BUILD_CTQ_WRITER ON)
 endif()
 
-add_subdirectory(test)
+if (BUILD_CTQ_READER)
+    set(SOURCES src/reader.cc)
+endif()
+
+if (BUILD_CTQ_WRITER)
+    if (NOT LibXml2_FOUND)
+        message(FATAL_ERROR "LibXml2 is required to build ctq writer")
+    endif()
+
+    set(SOURCES ${SOURCES} src/writer.cc)
+endif() 
+
+if (SOURCES)
+    add_library(ctq ${SOURCES})
+    
+    if (BUILD_CTQ_WRITER)
+        target_link_libraries(ctq PUBLIC LibXml2::LibXml2)
+        add_definitions( -DCTQ_WRITER_VERSION_MAJOR=0 )
+        add_definitions( -DCTQ_WRITER_VERSION_MINOR=0 )
+        add_definitions( -DCTQ_WRITER_VERSION_PATCH=0 )
+    endif()
+    
+    if (BUILD_CTQ_READER)
+        add_definitions( -DCTQ_READER_VERSION_MAJOR=0 )
+        add_definitions( -DCTQ_READER_VERSION_MINOR=0 )
+        add_definitions( -DCTQ_READER_VERSION_PATCH=0 )
+    endif()
+endif()
+
+if (BUILD_CTQ_CLI)
+    include(FetchContent)
+    FetchContent_Declare(
+        argparse
+        GIT_REPOSITORY https://github.com/p-ranav/argparse.git
+    )
+    FetchContent_MakeAvailable(argparse)
+
+    add_executable(ctq_cli src/cli.cc)
+    target_link_libraries(ctq_cli ctq argparse)
+    add_definitions( -DCTQ_WRITE_PROGRESS )
+
+endif()
+
+if(BUILD_TESTING)
+    add_subdirectory(test)
+endif()
