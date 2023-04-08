@@ -1,4 +1,5 @@
-#include "ctq_writer.hh"
+#include "ctq_writer.h"
+#include "ctq_util.hh"
 
 #include <string>
 #include <vector>
@@ -10,6 +11,7 @@
 #include <fstream>
 #include <cctype>
 #include <memory>
+#include <cmath>
 
 #include <libxml/parser.h>
 #include "xcdat.hpp"
@@ -22,15 +24,11 @@ using trie_type = xcdat::trie_8_type;
 static std::vector<std::string> xml_alphabet;
 static trie_type ch_trie;
 
-struct data_type {
-    data_type(uint8_t t) : t(t) {}
-    uint8_t t : 2;
-};
-
 struct parserState {
     bool        in_body;
     bool        in_entry;
     std::string ch;
+    size_t      entry_cnt = 0;
 };
 
 struct parseState : public parserState {
@@ -39,6 +37,28 @@ struct parseState : public parserState {
     std::set<std::string> ch_alpha{};
     uint32_t              id_mapping_bytes;
 };
+
+void print_progress(parserState *state, bool end = false) {
+#ifndef CTQ_WRITE_PROGRESS
+    return;
+#endif
+
+    int step = 5000;
+    int half_step = 100;
+
+    ++state->entry_cnt;
+    if(state->entry_cnt % step == 0) {
+        std::cout << ' ' << state->entry_cnt << std::endl;
+    } else if (state->entry_cnt % half_step == 0){
+        std::cout << '.' << std::flush;
+    }
+
+    if (end) {
+        int cnt = std::floor((step - state->entry_cnt % step) / (half_step + 0.0));
+        std::string blank(cnt, '_');
+        std::cout << blank << ' ' << state->entry_cnt << std::endl;
+    }
+}
 
 struct transformState : public parserState {
     transformState(const std::vector<uint64_t> &ids, const std::vector<std::string> &paths, std::ostream &os, size_t cluster_size) 
@@ -64,20 +84,6 @@ struct transformState : public parserState {
     const std::vector<std::string>     &paths; // sorted
     std::string                        path;
 };
-
-std::string ltrim(std::string s) {
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char c) { return !std::isspace(c); }));
-    return s;
-}
-
-std::string rtrim(std::string s) {
-    s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char c) { return !std::isspace(c); }).base(), s.end());
-    return s;
-}
-
-std::string trim(std::string s) {
-    return rtrim(ltrim(s));
-}
 
 void parse_characters(void *user_data, const xmlChar *ch, int len) {
     parseState *state = reinterpret_cast<parseState*>(user_data);
@@ -143,6 +149,8 @@ void parse_endElement(void *user_data, const xmlChar *name) {
     } 
 
     state->in_entry = false;
+
+    print_progress(state, str_name == "body");
 }
 
 void transform_characters(void *user_data, const xmlChar *ch, int len) {
@@ -218,6 +226,10 @@ void transform_startElement(void *user_data, const xmlChar *name, const xmlChar 
 void transform_endElement(void *user_data, const xmlChar *name) {
     transformState *state = reinterpret_cast<transformState*>(user_data);
     std::string str_name((char*)name); 
+    
+    std::vector<char> bp;
+    long data_size;
+    long tmp_data_size;
 
     if (state->in_entry) {
         state->entry_bp.push_back(0);
@@ -231,61 +243,27 @@ void transform_endElement(void *user_data, const xmlChar *name) {
         return std::distance(state->paths.begin(), it) + 1;
     };
 
-    if (str_name == "body") {
-        state->in_body = false;
-    } else if (str_name != "entry") {
-
-        if (state->in_entry && state->ch.size()) {
-            auto it = ch_trie.make_predictive_iterator(state->ch);
-            it.next();
-
-            uint32_t tmp = (uint32_t)((it.id() << 2) | 1U);
-            state->tmp_data.write((char*)&tmp, sizeof tmp);
-
-            uint8_t path_idx = get_path_idx(state->path);
-            uint32_t idx = (state->entry_id_idx_stack.back() << 8) | path_idx;
-
-            state->id_mapping[it.id()].push_back(idx);
-            state->ch.clear();
-
-            assert(state->id_mapping[it.id()].size() <= 0xFFFF);
-        }
-
-        // remove last node
-        size_t pos  = state->path.find_last_of("/");
-        state->path = state->path.substr(0, pos);
-
-        return;
-    }
-
-    state->path.clear();
-
-    auto get_cluster_size = [&state] () {
-        long data_pos       = state->data.tellp();
-        long tmp_data_pos   = state->tmp_data.tellp();
-
-        return data_pos + tmp_data_pos;
-    };
-
-    long cluster_size = get_cluster_size();
-
-    state->in_entry = false;
+    //auto get_cluster_size = [&state, &bp] () {
+    //    long data_pos       = state->data.tellp();
+    //    long tmp_data_pos   = state->tmp_data.tellp();
+//
+    //    return data_pos + tmp_data_pos + bp.size();
+    //};
 
     auto append_stream = [] (std::ostringstream &oss, std::ostream &os) {
         std::string str = oss.str();
         os.write(str.data(), str.size());
     };
 
-    auto reset_stream = [](std::ostream &os) {
-        os.clear();
-        os.seekp(0);
-    };
+    //auto reset_stream = [](std::ostream &os) {
+    //    os.clear();
+    //    os.seekp(0);
+    //};
 
-    auto add_tmp = [&] () {
-        if (state->tmp_data.tellp() == 0) return;
-
-        // set entry position in cluster
-        state->pos[state->entry_id_idx_stack.back()] = (uint16_t)(state->data.tellp());
+    auto get_bp_for_cur_entry = [&] () -> std::vector<char> {
+        if (state->tmp_data.tellp() == 0) return {};
+        
+        std::vector<char> bp;
 
         // bp
         {
@@ -296,7 +274,6 @@ void transform_endElement(void *user_data, const xmlChar *name) {
                 state->entry_bp.insert(state->entry_bp.begin(), pad, 0);
             }
 
-            std::vector<char> bp;
 
             for (int i = 0; i < state->entry_bp.size();) {
                 char b = 0;
@@ -309,18 +286,38 @@ void transform_endElement(void *user_data, const xmlChar *name) {
             }
 
             state->entry_bp.clear();
-            state->data.write((char*)bp.data(), bp.size());
+            //state->data.write((char*)bp.data(), bp.size());
         }
 
-        append_stream(state->tmp_data, state->data);
-        reset_stream(state->tmp_data);
+        //append_stream(state->tmp_data, state->data);
+        //reset_stream(state->tmp_data);
+        std::cout << "bp size: " << bp.size() << std::endl;
+        return bp;
     };
 
-    auto write_cluster = [&state, &add_tmp, &append_stream, &reset_stream](uint16_t cluster_size) {
-        long last_entry_id_idx = -1;
+    auto append_tmp_to_data = [&state, &bp, &append_stream] () {
+        if (bp.size() == 0) return;
 
-        if (cluster_size <= state->cluster_size) {
-            add_tmp();
+        // set entry position in cluster
+        state->pos[state->entry_id_idx_stack.back()] = (uint16_t)(state->data.tellp());
+
+        state->data.write((char*)bp.data(), bp.size());
+        append_stream(state->tmp_data, state->data);
+
+        state->tmp_data = std::ostringstream();
+        bp.clear();
+    };
+
+    auto write_cluster = [&]() {
+        long last_entry_id_idx = -1;
+        uint16_t cluster_size = 0;
+
+        if (data_size + tmp_data_size == 0) 
+            return;
+
+        if (data_size + tmp_data_size <= state->cluster_size) {
+            append_tmp_to_data();
+            std::cout << "tmp: " << data_size << " " << tmp_data_size << std::endl;
         } else {
             last_entry_id_idx = state->entry_id_idx_stack.back();
             state->entry_id_idx_stack.pop_back();
@@ -335,13 +332,13 @@ void transform_endElement(void *user_data, const xmlChar *name) {
 
         state->entry_id_idx_stack.clear();
 
-        if (last_entry_id_idx >= 0) {
-            state->entry_id_idx_stack.push_back(last_entry_id_idx);
-        }
+        assert(state->data.tellp() <= state->cluster_size);
+        assert(state->data.tellp() > 0);
 
+        cluster_size = state->data.tellp();
         state->os.write((char*)&cluster_size, sizeof cluster_size);
 
-        // TODO: compresss
+        // compress
         {
             int bound = LZ4_compressBound(cluster_size);
             char *inbuf  = new char[cluster_size];
@@ -352,6 +349,8 @@ void transform_endElement(void *user_data, const xmlChar *name) {
             append_stream(state->data, is);
             is.read(inbuf, cluster_size);
 
+            state->data = std::ostringstream();
+
             int rv = LZ4_compress_HC(inbuf, outbuf, cluster_size, bound, LZ4HC_CLEVEL_MAX);
 
             if (rv > 0) {
@@ -359,7 +358,6 @@ void transform_endElement(void *user_data, const xmlChar *name) {
                 state->os.write(outbuf, rv);
             }
 
-            reset_stream(state->data);
 
             delete[] inbuf;
             delete[] outbuf;
@@ -368,18 +366,68 @@ void transform_endElement(void *user_data, const xmlChar *name) {
                 std::cerr << "Cannot compress cluster" << std::endl;
             }
         }
+
+        assert(state->data.tellp() == 0);
+        
+        if (last_entry_id_idx >= 0) {
+
+            state->entry_id_idx_stack.push_back(last_entry_id_idx);
+            append_tmp_to_data();
+            
+            assert(state->data.tellp() == tmp_data_size);
+        }
+
+        assert(state->tmp_data.tellp() == 0);
     };
 
-    if (cluster_size >= state->cluster_size) {
-        write_cluster(cluster_size);
+    if (str_name == "body") {
+        state->in_body = false;
+    } else if (str_name != "entry") {
+        if (state->in_entry && state->ch.size()) {
+            auto it = ch_trie.make_predictive_iterator(state->ch);
+            it.next();
+
+            uint32_t tmp = (uint32_t)((it.id() << 2) | 1U);
+            state->tmp_data.write((char*)&tmp, sizeof tmp);
+
+            uint8_t path_idx = get_path_idx(state->path);
+            uint32_t idx = (state->entry_id_idx_stack.back() << 8) | path_idx;
+
+            state->id_mapping[it.id()].push_back(idx);
+            state->ch.clear();
+        }
+
+        // remove last node
+        size_t pos  = state->path.find_last_of("/");
+        state->path = state->path.substr(0, pos);
+
+        return;
     }
 
-    cluster_size = get_cluster_size();
-    if (str_name == "body" && cluster_size) {
-        write_cluster(cluster_size);
-    } else if (cluster_size) {
-        add_tmp();
+    state->path.clear();
+    state->in_entry = false;
+
+    bp = get_bp_for_cur_entry();
+    data_size = state->data.tellp();
+    tmp_data_size = (size_t)state->tmp_data.tellp() + bp.size();
+
+    std::cout << "sizes: " << data_size << " " << tmp_data_size << std::endl;
+
+    if (data_size + tmp_data_size >= state->cluster_size) {
+        write_cluster();
     }
+
+    // write last cluster if not full
+    if (str_name == "body") {
+        data_size = state->data.tellp();
+        tmp_data_size = (size_t)state->tmp_data.tellp() + bp.size();
+
+        write_cluster();
+    } else if (bp.size()) {
+        append_tmp_to_data();
+    }
+
+    print_progress(state, str_name == "body");
 }
 
 std::unique_ptr<parseState> parse_input(const std::string &src) {
@@ -419,7 +467,7 @@ int transform_input(const std::string &src, std::ostream &os, const parseState &
     {
         uint32_t cnt = state.ids.size();
 
-        std::cout << "cnt:             " << sizeof cnt << '\n'
+        std::cout << "\ncnt:             " << sizeof cnt << '\n'
                   << "ids:             " << cnt * sizeof state.ids[0] << '\n'
                   << "pos:             " << cnt * sizeof state.pos[0] << '\n'
                   << "cluster off idx: " << cnt * sizeof state.cluster_offset_idx[0] << '\n'
@@ -430,8 +478,7 @@ int transform_input(const std::string &src, std::ostream &os, const parseState &
         header_bytes += cnt * sizeof state.ids[0]; // ids
         header_bytes += cnt * sizeof state.pos[0]; // pos
         header_bytes += cnt * sizeof state.cluster_offset_idx[0]; // cluster offset idx
-        header_bytes += sizeof (uint32_t);         // id_mapping cnt
-        header_bytes += parse_state.id_mapping_bytes + ch_trie.num_keys() * sizeof (uint16_t); // id_mapping
+        header_bytes += parse_state.id_mapping_bytes + state.id_mapping.size() * sizeof (uint32_t); // id_mappings
 
         std::vector<char> buf(header_bytes, 0);
         os.write(buf.data(), buf.size());
@@ -457,27 +504,21 @@ int transform_input(const std::string &src, std::ostream &os, const parseState &
         os.write((char*)state.pos.data(), cnt * sizeof state.pos[0]); // TODO: compress
         os.write((char*)state.cluster_offset_idx.data(), cnt * sizeof state.cluster_offset_idx[0]); // TODO: compress
 
-        // id mapping
-        {
-            uint32_t map_cnt = state.id_mapping.size();
-            os.write((char*)&map_cnt, sizeof map_cnt);
+        for (const auto e : state.id_mapping) {
+            uint32_t cnt = (uint32_t)e.size();
 
-            for (const auto e : state.id_mapping) {
-                uint16_t cnt = (uint16_t)e.size();
-
-                os.write((char*)&cnt, sizeof cnt);
-                os.write((char*)e.data(), cnt * sizeof e[0]);
-            }
+            os.write((char*)&cnt, sizeof cnt);
+            os.write((char*)e.data(), cnt * sizeof e[0]);
         }
     }
 
-    std::cout << "header bytes: " << os.tellp() - start_pos << " : " << header_bytes << std::endl;
+    std::cout << "\nheader bytes: " << os.tellp() - start_pos << " : " << header_bytes << std::endl;
     assert(os.tellp() - start_pos == header_bytes);
 
     os.seekp(cur_pos, os.beg);
 
-    // write cluster offsets
-    {   
+    // cluster offsets
+    {
         uint32_t cluster_cnt = state.cluster_offsets.size();
         uint32_t bytes = cluster_cnt * sizeof state.cluster_offsets[0];
 
@@ -506,7 +547,13 @@ int save_alphabets(std::ostream &os) {
     os.seekp(xalpha_sz, os.cur);
 
     ch_trie_bytes = xcdat::memory_in_bytes(ch_trie);
-    xcdat::save(ch_trie, os);
+    
+    try {
+        xcdat::save(ch_trie, os);
+    } catch (const xcdat::exception& ex) {
+        std::cerr << ex.what() << std::endl;
+        return 1;
+    }
 
     return 0;
 }
@@ -528,6 +575,17 @@ int write(const std::string &src, const std::string &dst, const std::vector<std:
     } 
 
     output = std::ofstream(dst, std::ios::binary);
+
+    // version
+    {
+        uint32_t major = CTQ_WRITER_VERSION_MAJOR;
+        uint32_t minor = CTQ_WRITER_VERSION_MINOR;
+        uint32_t patch = CTQ_WRITER_VERSION_PATCH;
+
+        output.write((char*)&major, sizeof major);
+        output.write((char*)&minor, sizeof minor);
+        output.write((char*)&patch, sizeof patch);
+    }
 
     save_alphabets(output);
     transform_input(src, output, *parse_state, paths, cluster_size);
