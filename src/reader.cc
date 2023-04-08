@@ -1,15 +1,91 @@
-#include "ctq_reader.hh"
+#include "ctq_reader.h"
 
 #include <fstream>
 #include <iostream>
 #include <bitset>
+#include <string>
 
+#include "xcdat.hpp"
 #include <lz4.h>
 
-struct data_type {
-    data_type(uint8_t t) : t(t) {}
-    uint8_t t : 2;
+extern "C" {
+
+#include <string.h>
+
+struct ctq_ctx_internal {
+    ctq_ctx_internal(const std::string &filename) : reader(filename) {}
+
+    CTQ::Reader reader;
 };
+
+
+ctq_ctx *ctq_create_reader(const char *filename) {
+    ctq_ctx *ctx = new ctq_ctx_internal(std::string(filename));
+
+    // TODO: catch errors
+
+    return ctx;
+}
+
+void ctq_destroy_reader(ctq_ctx *ctx) {
+    std::cout << "destroy reader" << std::endl;
+    delete ctx;
+}
+
+ctq_find_ret *ctq_find(const ctq_ctx *ctx, const char *keyword, bool exact_match, size_t offset, size_t count, int path_idx) {
+    auto ret = ctx->reader.find(std::string(keyword), exact_match, offset, count, path_idx);
+
+    if (ret.size() == 0) 
+        return NULL;
+
+    ctq_find_ret *arr = new ctq_find_ret[ret.size() + 1];
+    //arr->ret = ;
+    //arr->size = ret.size();
+    //find_ret[ret.size()].key = NULL;
+    arr[ret.size()].ids = NULL;
+    //find_ret[ret.size()].id_cnt = 0;
+
+    int i = 0;
+    for (const auto e : ret) {
+        arr[i].key    = strdup(e.first.c_str());
+        arr[i].id_cnt = e.second.size();
+        arr[i].ids    = new uint64_t[e.second.size()];
+
+        memcpy((char*)arr[i].ids, (char*)e.second.data(), e.second.size() * sizeof (uint64_t));
+
+        ++i;
+    }
+
+    return arr;
+}
+
+char *ctq_get(ctq_ctx *ctx, uint64_t id) {
+    std::string ret = ctx->reader.get(id);
+
+    if (ret.size() == 0)
+        return NULL;
+
+    return strdup(ret.c_str());
+}
+
+void ctq_find_ret_free(ctq_find_ret *arr) {
+    for (int i = 0; arr[i].ids != NULL; ++i) {
+        free((void*)arr[i].key);
+        delete[] arr[i].ids;
+    }
+
+    delete[] arr;
+}
+
+const char *ctq_writer_version(const ctq_ctx *ctx) {
+    return strdup(ctx->reader.get_writer_version().c_str());
+}
+
+const char *ctq_reader_version(const ctq_ctx *ctx) {
+    return strdup(ctx->reader.get_reader_version().c_str());
+}
+
+}
 
 long read_cluster(std::istream &is, std::ostream &os) {
     int compressed_size;
@@ -46,6 +122,15 @@ Reader::Reader(const std::string &filename) : input(filename) {
     uint32_t id_cnt     = 0;
     uint32_t id_map_cnt = 0;
 
+    // version
+    {
+        input.read((char*)&m_writer_version_major, sizeof m_writer_version_major);
+        input.read((char*)&m_writer_version_minor, sizeof m_writer_version_minor);
+        input.read((char*)&m_writer_version_patch, sizeof m_writer_version_patch);
+
+        // TODO: check supported
+    }
+
     // read xml_alphabet
     {
         input.read((char*)&xalpha_sz, sizeof xalpha_sz);
@@ -80,12 +165,10 @@ Reader::Reader(const std::string &filename) : input(filename) {
         input.read((char*)cluster_offset_idx.data(), id_cnt * sizeof cluster_offset_idx[0]);
     }
 
-    // read id_mapping
+    // id_mapping
     {
-        input.read((char*)&id_map_cnt, sizeof id_map_cnt);
-
-        for (uint32_t i = 0; i < id_map_cnt; ++i) {
-            uint16_t cnt;
+        for (uint32_t i = 0; i < ch_trie.num_keys(); ++i) {
+            uint32_t cnt;
             std::vector<uint32_t> indexes;
 
             input.read((char*)&cnt, sizeof cnt);
@@ -208,8 +291,9 @@ std::string Reader::get(uint64_t id) {
 
     std::cout << "cluster size: " << cluster_size << std::endl;
 
+    assert(data_pos < cluster_size);
+
     ss.clear();
-    ss.seekg(0);
     ss.seekg(data_pos, ss.beg);
 
     auto close_tags = [&entry_bp, &output, &tag_stack] (int &i) {
@@ -233,7 +317,6 @@ std::string Reader::get(uint64_t id) {
         do {
             char b;
             ss.read(&b, sizeof b);
-            //std::cout << "b " << (int)b << std::endl;
 
             for (int j = 7; j >= 0; --j) {
                 bool bit = 1 & (b >> j);
@@ -312,6 +395,22 @@ std::string Reader::get(uint64_t id) {
     close_tags(i);
 
     return output;
+}
+
+std::string Reader::get_writer_version() const {
+    size_t size = std::snprintf(nullptr, 0, "%d.%d.%d", m_writer_version_major, m_writer_version_minor, m_writer_version_patch);
+    std::string version(size, 0);
+    std::snprintf(version.data(), size, "%d.%d.%d", m_writer_version_major, m_writer_version_minor, m_writer_version_patch);
+
+    return version;
+}
+
+std::string Reader::get_reader_version() const {
+    size_t size = std::snprintf(nullptr, 0, "%d.%d.%d", CTQ_READER_VERSION_MAJOR, CTQ_READER_VERSION_MINOR, CTQ_READER_VERSION_PATCH);
+    std::string version(size, 0);
+    std::snprintf(version.data(), size, "%d.%d.%d", CTQ_READER_VERSION_MAJOR, CTQ_READER_VERSION_MINOR, CTQ_READER_VERSION_PATCH);
+
+    return version;
 }
 
 }
