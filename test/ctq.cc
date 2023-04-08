@@ -1,10 +1,11 @@
 #include <string>
+#include <vector>
+#include <cstring>
 
 #include "catch2/catch_test_macros.hpp"
-#include "ctq_writer.hh"
-#include "ctq_reader.hh"
+#include "ctq_writer.h"
+#include "ctq_reader.h"
 
-#include <vector>
 
 // regexp
 // blank (?<=>)\s+|\n\s*(?=<)
@@ -25,47 +26,102 @@ TEST_CASE("simple") {
         "/entry/sense/cit/quote",   // don't find
     };
 
-    CTQ::write(input_filename, output_filename, paths);
+    CTQ::write(input_filename, output_filename, paths, 500);
 
-    CTQ::Reader reader(output_filename);
+    SECTION("C++") {
+        CTQ::Reader reader(output_filename);
 
-    for (int i = 0; i < keys.size(); ++i) {
-        // default
-        {
-            auto find_ret = reader.find(keys[i]);
-            auto it = find_ret.begin();
+        for (int i = 0; i < keys.size(); ++i) {
+            // default
+            {
+                auto find_ret = reader.find(keys[i]);
+                auto it = find_ret.begin();
 
-            REQUIRE(find_ret.size() == 1);
-            REQUIRE(it->first == keys[i]);
-            REQUIRE(it->second.size() == 1);
-            REQUIRE(it->second.front() == ids[i]);
+                REQUIRE(find_ret.size() == 1);
+                REQUIRE(it->first == keys[i]);
+                REQUIRE(it->second.size() == 1);
+                REQUIRE(it->second.front() == ids[i]);
 
 
-            std::string entry = reader.get(it->second.front());
-            REQUIRE(entry.size() > 0);
-            REQUIRE(entry == entries[i]);
+                std::string entry = reader.get(it->second.front());
+                REQUIRE(entry.size() > 0);
+                REQUIRE(entry == entries[i]);
+            }
+
+            // path
+            {
+                auto find_orth  = reader.find(keys[i], false, 0, 0, 1);
+                auto find_quote = reader.find(keys[i], false, 0, 0, 2);
+
+                REQUIRE(find_orth.size() == 1);
+                REQUIRE(find_quote.size() == 0);
+            }
         }
 
-        // path
+        // range for "pleasant (fragrance)" and "plump"
         {
-            auto find_orth  = reader.find(keys[i], false, 0, 0, 1);
-            auto find_quote = reader.find(keys[i], false, 0, 0, 2);
+            auto find1 = reader.find("p", false, 0, 1);
+            auto find2 = reader.find("p", false, 1, 1);
 
-            REQUIRE(find_orth.size() == 1);
-            REQUIRE(find_quote.size() == 0);
+            REQUIRE(find1.size() == 1);
+            REQUIRE(find2.size() == 1);
+            REQUIRE(find1.begin()->first != find2.begin()->first);
         }
 
+        // prefix
+        {
+            auto find = reader.find("p");
 
-        ++i;
+            REQUIRE(find.size() == 2);
+        }
+
+        // empty keyword
+        {
+            auto find = reader.find("");
+
+            REQUIRE(find.size() > 0);
+        }
     }
 
-    // range for "pleasant (fragrance)" and "plump"
-    {
-        auto find1 = reader.find("p", false, 0, 1);
-        auto find2 = reader.find("p", false, 1, 1);
+    SECTION("C") {
+        ctq_ctx *ctx = ctq_create_reader(output_filename.c_str());
 
-        REQUIRE(find1.size() == 1);
-        REQUIRE(find2.size() == 1);
-        REQUIRE(find1.begin()->first != find2.begin()->first);
+        for (int i = 0; i < keys.size(); ++i) {
+            // default
+            {
+                ctq_find_ret *arr = ctq_find(ctx, keys[i].c_str(), false, 0, 0, 0);
+                
+                REQUIRE(arr != NULL);
+                REQUIRE(std::string(arr[0].key) == keys[i]);
+                REQUIRE(arr[0].id_cnt == 1);
+                REQUIRE(arr[0].ids[0] == ids[i]);
+
+
+                const char *entry = ctq_get(ctx, arr[0].ids[0]);
+                REQUIRE(entry != NULL);
+                REQUIRE(strlen(entry) > 0);
+                REQUIRE(std::string(entry) == entries[i]);
+                free((void*)entry);
+            }
+        }
+
+        {
+            ctq_find_ret *arr = ctq_find(ctx, "p", false, 0, 0, 0);
+
+            REQUIRE(arr != NULL);
+
+            ctq_find_ret_free(arr);
+        }
+
+        // empty keyword
+        {
+            ctq_find_ret *arr = ctq_find(ctx, "", false, 0, 0, 0);
+
+            REQUIRE(arr != NULL);
+
+            ctq_find_ret_free(arr);
+        }
+
+        ctq_destroy_reader(ctx);
     }
 }
