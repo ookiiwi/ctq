@@ -243,22 +243,10 @@ void transform_endElement(void *user_data, const xmlChar *name) {
         return std::distance(state->paths.begin(), it) + 1;
     };
 
-    //auto get_cluster_size = [&state, &bp] () {
-    //    long data_pos       = state->data.tellp();
-    //    long tmp_data_pos   = state->tmp_data.tellp();
-//
-    //    return data_pos + tmp_data_pos + bp.size();
-    //};
-
     auto append_stream = [] (std::ostringstream &oss, std::ostream &os) {
         std::string str = oss.str();
         os.write(str.data(), str.size());
     };
-
-    //auto reset_stream = [](std::ostream &os) {
-    //    os.clear();
-    //    os.seekp(0);
-    //};
 
     auto get_bp_for_cur_entry = [&] () -> std::vector<char> {
         if (state->tmp_data.tellp() == 0) return {};
@@ -286,12 +274,8 @@ void transform_endElement(void *user_data, const xmlChar *name) {
             }
 
             state->entry_bp.clear();
-            //state->data.write((char*)bp.data(), bp.size());
         }
 
-        //append_stream(state->tmp_data, state->data);
-        //reset_stream(state->tmp_data);
-        std::cout << "bp size: " << bp.size() << std::endl;
         return bp;
     };
 
@@ -317,7 +301,6 @@ void transform_endElement(void *user_data, const xmlChar *name) {
 
         if (data_size + tmp_data_size <= state->cluster_size) {
             append_tmp_to_data();
-            std::cout << "tmp: " << data_size << " " << tmp_data_size << std::endl;
         } else {
             last_entry_id_idx = state->entry_id_idx_stack.back();
             state->entry_id_idx_stack.pop_back();
@@ -410,8 +393,6 @@ void transform_endElement(void *user_data, const xmlChar *name) {
     bp = get_bp_for_cur_entry();
     data_size = state->data.tellp();
     tmp_data_size = (size_t)state->tmp_data.tellp() + bp.size();
-
-    std::cout << "sizes: " << data_size << " " << tmp_data_size << std::endl;
 
     if (data_size + tmp_data_size >= state->cluster_size) {
         write_cluster();
@@ -547,7 +528,7 @@ int save_alphabets(std::ostream &os) {
     os.seekp(xalpha_sz, os.cur);
 
     ch_trie_bytes = xcdat::memory_in_bytes(ch_trie);
-    
+
     try {
         xcdat::save(ch_trie, os);
     } catch (const xcdat::exception& ex) {
