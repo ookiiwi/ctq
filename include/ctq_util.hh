@@ -19,4 +19,14 @@ inline std::string trim(std::string s) {
     return rtrim(ltrim(s));
 }
 
+inline bool is_bp_balenced(const std::vector<bool> &bp) {
+    size_t open_cnt = 0;
+
+    for (const auto e : bp) {
+        e ? ++open_cnt : --open_cnt;
+    }
+
+    return open_cnt == 0;
+}
+
 #endif
