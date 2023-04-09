@@ -4,6 +4,7 @@
 #include <iostream>
 #include <bitset>
 #include <string>
+#include <stack>
 
 #include "xcdat.hpp"
 #include <lz4.h>
@@ -20,9 +21,16 @@ struct ctq_ctx_internal {
 
 
 ctq_ctx *ctq_create_reader(const char *filename) {
-    ctq_ctx *ctx = new ctq_ctx_internal(std::string(filename));
+    ctq_ctx *ctx = NULL;
 
-    // TODO: catch errors
+    try {
+        ctx = new ctq_ctx_internal(std::string(filename));
+    } catch (const CTQ::reader_exception& ex) {
+        if (ctx) delete ctx;
+
+        std::cerr << ex.what() << std::endl;    
+        return NULL;
+    }
 
     return ctx;
 }
@@ -33,39 +41,45 @@ void ctq_destroy_reader(ctq_ctx *ctx) {
 }
 
 ctq_find_ret *ctq_find(const ctq_ctx *ctx, const char *keyword, bool exact_match, size_t offset, size_t count, int path_idx) {
-    auto ret = ctx->reader.find(std::string(keyword), exact_match, offset, count, path_idx);
+    try {
+        auto ret = ctx->reader.find(std::string(keyword), exact_match, offset, count, path_idx);
 
-    if (ret.size() == 0) 
+        if (ret.size() == 0) 
+            return NULL;
+
+        ctq_find_ret *arr = new ctq_find_ret[ret.size() + 1];
+        arr[ret.size()].ids = NULL;
+
+        int i = 0;
+        for (const auto e : ret) {
+            arr[i].key    = strdup(e.first.c_str());
+            arr[i].id_cnt = e.second.size();
+            arr[i].ids    = new uint64_t[e.second.size()];
+
+            memcpy((char*)arr[i].ids, (char*)e.second.data(), e.second.size() * sizeof (uint64_t));
+
+            ++i;
+        }
+
+        return arr;
+    }  catch (const CTQ::reader_exception& ex) {    
+        std::cerr << ex.what() << std::endl;    
         return NULL;
-
-    ctq_find_ret *arr = new ctq_find_ret[ret.size() + 1];
-    //arr->ret = ;
-    //arr->size = ret.size();
-    //find_ret[ret.size()].key = NULL;
-    arr[ret.size()].ids = NULL;
-    //find_ret[ret.size()].id_cnt = 0;
-
-    int i = 0;
-    for (const auto e : ret) {
-        arr[i].key    = strdup(e.first.c_str());
-        arr[i].id_cnt = e.second.size();
-        arr[i].ids    = new uint64_t[e.second.size()];
-
-        memcpy((char*)arr[i].ids, (char*)e.second.data(), e.second.size() * sizeof (uint64_t));
-
-        ++i;
     }
-
-    return arr;
 }
 
 char *ctq_get(ctq_ctx *ctx, uint64_t id) {
-    std::string ret = ctx->reader.get(id);
+    try {
+        std::string ret = ctx->reader.get(id);
 
-    if (ret.size() == 0)
+        if (ret.size() == 0)
+            return NULL;
+
+        return strdup(ret.c_str());
+    }  catch (const CTQ::reader_exception& ex) {   
+        std::cerr << ex.what() << std::endl;    
         return NULL;
-
-    return strdup(ret.c_str());
+    }
 }
 
 void ctq_find_ret_free(ctq_find_ret *arr) {
@@ -115,12 +129,23 @@ long read_cluster(std::istream &is, std::ostream &os) {
     return rv;
 }
 
+struct element {
+    element(uint8_t type, uint32_t data) : type(type), data(data) {}
+
+    uint8_t type;
+    uint32_t data;
+};
+
 namespace CTQ {
 
-Reader::Reader(const std::string &filename) : input(filename) {
+Reader::Reader(const std::string &filename, bool enable_filters) : input(filename), filter_support(false) {
     uint16_t xalpha_sz  = 0;
     uint32_t id_cnt     = 0;
     uint32_t id_map_cnt = 0;
+
+    if (!input.good()) {
+        CTQ_READER_THROW("Cannot open file");
+    }
 
     // version
     {
@@ -129,6 +154,12 @@ Reader::Reader(const std::string &filename) : input(filename) {
         input.read((char*)&m_writer_version_patch, sizeof m_writer_version_patch);
 
         // TODO: check supported
+        std::string version = get_writer_version();
+
+        if (version < CTQ_WRITER_MIN_SUPPORTED_VERSION || version > CTQ_WRITER_MAX_SUPPORTED_VERSION) {
+            std::cout << "version: " << version << std::endl;
+            CTQ_READER_THROW("Unsupported version");
+        }
     }
 
     // read xml_alphabet
@@ -177,6 +208,23 @@ Reader::Reader(const std::string &filename) : input(filename) {
             input.read((char*)indexes.data(), cnt * sizeof indexes[0]);
 
             id_mapping.push_back(indexes);
+
+            if (enable_filters) {
+                for (const auto e : indexes) {
+                    if (((e>>8) >= ids.size())) {
+                        CTQ_READER_THROW("Corrupted file");
+                    }
+
+                    uint64_t id = ids[e>>8];
+
+                    id_to_ch_trie[id];
+
+                    auto it = id_to_ch_trie.find(id);
+                    assert(it != id_to_ch_trie.end());
+
+                    it->second.insert(i);
+                }
+            }
         }
     }
 
@@ -187,12 +235,10 @@ Reader::Reader(const std::string &filename) : input(filename) {
         uint32_t cnt;
 
         input.seekg(-(sizeof cnt), input.end);
-        std::cout << "get from: " << input.tellg() << std::endl;
         input.read((char*)&cnt, sizeof cnt);
         cluster_offsets.resize(cnt);
 
         input.seekg(-(sizeof cnt + cnt * sizeof cluster_offsets[0]), input.end);
-        std::cout << "get from: " << input.tellg() << std::endl;
         input.read((char*)cluster_offsets.data(), cnt * sizeof cluster_offsets[0]);
         input.seekg(m_header_end, input.beg);
     }
@@ -224,8 +270,12 @@ Reader::~Reader() {
     }
 }
 
-std::map<std::string, std::vector<uint64_t>> Reader::find(const std::string &keyword, bool exact_match, size_t offset, size_t count, int path_idx) const {
+std::map<std::string, std::vector<uint64_t>> Reader::find(const std::string &keyword, bool exact_match, size_t offset, size_t count, int path_idx, const std::string &filter, int filter_path_idx) const {
     std::map<std::string, std::vector<uint64_t>> ret;
+
+    if (filter.size() && id_to_ch_trie.size() == 0) {
+        CTQ_READER_THROW("No filter support");
+    }
     
     auto it = ch_trie.make_predictive_iterator(keyword);
     size_t i = 0;
@@ -241,19 +291,41 @@ std::map<std::string, std::vector<uint64_t>> Reader::find(const std::string &key
         if (exact_match && key != keyword) 
             break;
 
-        assert(id < id_mapping.size());
+        if (id >= id_mapping.size()) {
+            CTQ_READER_THROW("Corrupted file");
+        }
 
         for (const auto e : id_mapping[id]) {
             uint32_t id = ids[e >> 8];
             uint8_t  pidx = 7 & e;
             
-            if (!path_idx || pidx == path_idx)
-                key_ids.push_back(id);
-            std::cout << "key(" << (int)pidx << ", " << path_idx << "): " << key << std::endl;
+            if (!path_idx || pidx == path_idx) {
+                bool add_id = true;
+
+                if (filter.size()) {
+                    add_id = false;
+
+                    auto it = id_to_ch_trie.find(id);
+                    assert(it != id_to_ch_trie.end());
+                    uint8_t filter_pidx = 7 & it->first;
+
+                    if (!filter_path_idx || filter_pidx == filter_path_idx) {
+                        for (const auto e : it->second) {
+                            std::string filter_key = ch_trie.decode(e);
+
+                            if (strncmp(filter.c_str(), filter_key.c_str(), filter.size()) == 0) {
+                                add_id = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (add_id)
+                    key_ids.push_back(id);
+            }            
         }
 
-        assert(key_ids.size() != 0 || path_idx);
-        
         if (key_ids.size())
             ret[key] = key_ids;
     }
@@ -270,41 +342,53 @@ std::string Reader::get(uint64_t id) {
 
     uint32_t index = std::distance(ids.begin(), it);
     uint32_t cluster_offset = cluster_offsets[cluster_offset_idx[index]];
-    uint16_t data_pos = pos[index]; 
+    uint16_t data_pos = pos[index];
 
     std::cout << "id: " << id << 
                 "\nindex: " << index << 
                 "\ncluster offset: " << cluster_offset <<
-                "\ndata pos: " << data_pos <<  std::endl;
+                "\ndata pos: " << data_pos << std::endl;
 
     input.seekg(cluster_offset, input.beg);
 
-    std::vector<std::string> tag_stack;
+    std::stack<std::string> open_tags;
     std::string output;
-    uint8_t prev_type = 0;
     std::vector<bool> entry_bp;
-    int entry_pop = 0;
-    int entry_pop_cnt = 0;
+    uint8_t last_node_pop;
+    long last_bp_open = 0;
 
     std::stringstream ss;
     uint32_t cluster_size = read_cluster(input, ss);
 
     std::cout << "cluster size: " << cluster_size << std::endl;
 
-    assert(data_pos < cluster_size);
+    if (data_pos >= cluster_size) {
+        CTQ_READER_THROW("Corrupted file");
+    }
 
     ss.clear();
     ss.seekg(data_pos, ss.beg);
+    ss.read((char*)&last_node_pop, sizeof last_node_pop);
 
-    auto close_tags = [&entry_bp, &output, &tag_stack] (int &i) {
+    /// increment i
+    auto close_tags = [&entry_bp, &output, &open_tags] (int &i) {
         while (i < entry_bp.size() && entry_bp[i++] == 0) {
-            assert(tag_stack.size());
+            assert(!open_tags.empty());
 
-            std::string tag = tag_stack.back();
-            tag_stack.pop_back();
+            std::string tag = open_tags.top();
+            open_tags.pop();
 
             output += "</" + tag + ">";
         }
+    };
+
+    auto read_element = [&ss](bool data_only = false) -> element {
+        if (ss.eof()) return element(0, 0);
+
+        uint32_t tmp;
+        ss.read((char*)&tmp, sizeof tmp);
+
+        return data_only ? element(0, tmp) : element(3 & tmp, tmp >> 2);
     };
 
     std::cout << "ss state: " << ss.good() << std::endl;
@@ -314,7 +398,7 @@ std::string Reader::get(uint64_t id) {
         int open_cnt = -1;
 
         // bp is known to be well-formed    
-        do {
+        for (int i = 0; open_cnt && !ss.eof(); ) {
             char b;
             ss.read(&b, sizeof b);
 
@@ -329,70 +413,83 @@ std::string Reader::get(uint64_t id) {
 
                     if (bit) {
                         ++open_cnt;
-                        ++entry_pop;
+                        last_bp_open = i;
                     } else {
-                        if (entry_bp.back() == 1) {
-                            ++entry_pop;
-                        }
-
                         --open_cnt;
                     }
+                    ++i;
 
                     entry_bp.push_back(bit);
                 }
             }
-        } while (open_cnt && !ss.eof());
+        }
     }
 
-    std::cout << "entry pop: " << entry_pop << " | ss state: " << ss.good() << std::endl;
+    int prev_type = 0;
+    int last_node_pop_cnt = -1;
+    element elt = read_element();
 
-    int i;
-    for (i = 0; i < entry_bp.size() && !ss.eof();) {
-        uint8_t   type;
-        uint32_t  data;
-        uint32_t  tmp;
+    if (ss.eof()) {
+        CTQ_READER_THROW("Corrupted file");
+    }
 
-        ss.read((char*)&tmp, sizeof tmp);
-
-        type = (uint8_t)(3 & tmp);
-        data = ((~0U << 2) & tmp) >> 2;
-
-        if (i && prev_type != 1 && type != 2) {
-            output += ">";
-        }
-
-        // data
-        if (type == 1) {
-            assert(data < ch_trie.num_keys());
-            std::string key = ch_trie.decode(data);
-            
-            output += key;       
-        } else {
-            assert(data < xml_alphabet.size());
-
-            std::string key = xml_alphabet[data];
-
-            if (type == 0) {
-                close_tags(i);
-
-                output += "<" + key;
-                tag_stack.push_back(key);
-            } else {
-                uint32_t value;
-
-                ss.read((char*)&value, sizeof value);
-
-                output += " " + key + "=\"" + xml_alphabet[value] + '"';
+    for (int i = 0; i < entry_bp.size(); ++i) {
+        if (entry_bp[i] == 0) {
+            if (prev_type != 1) {
+                output += '>';
             }
+
+            assert(!open_tags.empty());
+
+            output += "</" + open_tags.top() + '>';
+            open_tags.pop();
+
+            continue;
         }
 
-        prev_type = type;
+        do {            
+            if (elt.type == 0) {
+                if (prev_type != 1 && output.size() && entry_bp[i-1]) {
+                    output += '>';
+                }
 
-        if (type != 2) ++entry_pop_cnt;
-        if (entry_pop_cnt >= entry_pop) break;
+                if (elt.data >= xml_alphabet.size()) {
+                    CTQ_READER_THROW("Corrupted file");
+                }
+
+                std::string key = xml_alphabet[elt.data];
+                output += '<' + key;
+
+                open_tags.push(key);
+                last_node_pop_cnt = -1;
+            } else if (elt.type == 1) {
+                if (elt.data >= ch_trie.num_keys()) {
+                    CTQ_READER_THROW("Corrupted file");
+                }
+
+                std::string key = ch_trie.decode(elt.data);
+                output += '>' + key;
+            } else {
+                uint32_t dataName = elt.data;
+                elt = read_element(true);
+                uint32_t dataValue = elt.data;
+
+                if (dataName >= xml_alphabet.size() || dataValue >= xml_alphabet.size()) {
+                    CTQ_READER_THROW("Corrupted file");
+                }
+
+                std::string name  = xml_alphabet[dataName];
+                std::string value = xml_alphabet[dataValue];
+
+                output += ' ' + name + "=\"" + value + '"';
+            }
+
+            ++last_node_pop_cnt;
+            prev_type = elt.type;
+
+            elt = read_element();
+        } while ( !ss.eof() && elt.type != 0 && (i != last_bp_open || last_node_pop_cnt < last_node_pop));
     }
-
-    close_tags(i);
 
     return output;
 }
@@ -400,7 +497,7 @@ std::string Reader::get(uint64_t id) {
 std::string Reader::get_writer_version() const {
     size_t size = std::snprintf(nullptr, 0, "%d.%d.%d", m_writer_version_major, m_writer_version_minor, m_writer_version_patch);
     std::string version(size, 0);
-    std::snprintf(version.data(), size, "%d.%d.%d", m_writer_version_major, m_writer_version_minor, m_writer_version_patch);
+    std::snprintf(version.data(), size + 1, "%d.%d.%d", m_writer_version_major, m_writer_version_minor, m_writer_version_patch);
 
     return version;
 }
@@ -408,7 +505,7 @@ std::string Reader::get_writer_version() const {
 std::string Reader::get_reader_version() const {
     size_t size = std::snprintf(nullptr, 0, "%d.%d.%d", CTQ_READER_VERSION_MAJOR, CTQ_READER_VERSION_MINOR, CTQ_READER_VERSION_PATCH);
     std::string version(size, 0);
-    std::snprintf(version.data(), size, "%d.%d.%d", CTQ_READER_VERSION_MAJOR, CTQ_READER_VERSION_MINOR, CTQ_READER_VERSION_PATCH);
+    std::snprintf(version.data(), size + 1, "%d.%d.%d", CTQ_READER_VERSION_MAJOR, CTQ_READER_VERSION_MINOR, CTQ_READER_VERSION_PATCH);
 
     return version;
 }
