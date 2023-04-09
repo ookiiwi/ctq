@@ -38,28 +38,6 @@ struct parseState : public parserState {
     uint32_t              id_mapping_bytes;
 };
 
-void print_progress(parserState *state, bool end = false) {
-#ifndef CTQ_WRITE_PROGRESS
-    return;
-#endif
-
-    int step = 5000;
-    int half_step = 100;
-
-    ++state->entry_cnt;
-    if(state->entry_cnt % step == 0) {
-        std::cout << ' ' << state->entry_cnt << std::endl;
-    } else if (state->entry_cnt % half_step == 0){
-        std::cout << '.' << std::flush;
-    }
-
-    if (end) {
-        int cnt = std::floor((step - state->entry_cnt % step) / (half_step + 0.0));
-        std::string blank(cnt, '_');
-        std::cout << blank << ' ' << state->entry_cnt << std::endl;
-    }
-}
-
 struct transformState : public parserState {
     transformState(const std::vector<uint64_t> &ids, const std::vector<std::string> &paths, std::ostream &os, size_t cluster_size) 
         :   ids(ids), 
@@ -83,7 +61,30 @@ struct transformState : public parserState {
     std::vector<bool>                  entry_bp;
     const std::vector<std::string>     &paths; // sorted
     std::string                        path;
+    int                                last_node_pop; // number of element in the last depest node
 };
+
+void print_progress(parserState *state, bool end = false) {
+#ifndef CTQ_WRITE_PROGRESS
+    return;
+#endif
+
+    int step = 5000;
+    int half_step = 100;
+
+    ++state->entry_cnt;
+    if(state->entry_cnt % step == 0) {
+        std::cout << ' ' << state->entry_cnt << std::endl;
+    } else if (state->entry_cnt % half_step == 0){
+        std::cout << '.' << std::flush;
+    }
+
+    if (end) {
+        int cnt = std::floor((step - state->entry_cnt % step) / (half_step + 0.0));
+        std::string blank(cnt, '_');
+        std::cout << blank << ' ' << state->entry_cnt << std::endl;
+    }
+}
 
 void parse_characters(void *user_data, const xmlChar *ch, int len) {
     parseState *state = reinterpret_cast<parseState*>(user_data);
@@ -99,7 +100,8 @@ void parse_characters(void *user_data, const xmlChar *ch, int len) {
 
 void parse_startElement(void *user_data, const xmlChar *name, const xmlChar **attrs) {
     parseState *state = reinterpret_cast<parseState*>(user_data);
-    std::string str_name((char*)name); 
+    std::string str_name((char*)name);
+    bool xml_id_set = false;
 
     if (str_name == "body") {
         state->in_body = true;
@@ -119,6 +121,7 @@ void parse_startElement(void *user_data, const xmlChar *name, const xmlChar **at
         std::string att_value((char*)attrs[i+1]);
 
         if (att_name == "xml:id") {
+            xml_id_set = true;
             att_value.erase(att_value.begin(), std::find_if(att_value.begin(), att_value.end(), [](char c) { return std::isdigit(c); }));
             state->ids.push_back(std::atol(att_value.c_str()));
 
@@ -127,6 +130,10 @@ void parse_startElement(void *user_data, const xmlChar *name, const xmlChar **at
 
         state->xml_alpha.insert(att_name);
         state->xml_alpha.insert(att_value);
+    }
+
+    if (str_name == "entry" && xml_id_set == false) {
+        CTQ_WRITER_THROW("No xml id");
     }
 }
 
@@ -174,6 +181,8 @@ void transform_startElement(void *user_data, const xmlChar *name, const xmlChar 
         return it != xml_alphabet.end() ? std::distance(xml_alphabet.begin(), it) : -1;
     };
 
+    state->last_node_pop = 0;
+
     if (str_name == "body") {
         state->in_body = true;
         return;
@@ -183,7 +192,9 @@ void transform_startElement(void *user_data, const xmlChar *name, const xmlChar 
 
     if (str_name == "entry") {
         state->in_entry = true;
-    } 
+    } else if (!state->in_entry) {
+        return;
+    }
 
     state->entry_bp.push_back(1);
     state->path += "/" + str_name;
@@ -220,6 +231,7 @@ void transform_startElement(void *user_data, const xmlChar *name, const xmlChar 
         uint32_t tmp = (uint32_t)((att_name_idx << 2) | 2U);
         state->tmp_data.write((char*)&tmp, sizeof tmp);
         state->tmp_data.write((char*)&att_val_idx, sizeof att_val_idx);
+        ++state->last_node_pop;
     }
 }
 
@@ -230,10 +242,6 @@ void transform_endElement(void *user_data, const xmlChar *name) {
     std::vector<char> bp;
     long data_size;
     long tmp_data_size;
-
-    if (state->in_entry) {
-        state->entry_bp.push_back(0);
-    }
 
     auto get_path_idx = [&state](const std::string &path) -> uint8_t {
         auto it = std::lower_bound(state->paths.begin(), state->paths.end(), path);
@@ -250,6 +258,7 @@ void transform_endElement(void *user_data, const xmlChar *name) {
 
     auto get_bp_for_cur_entry = [&] () -> std::vector<char> {
         if (state->tmp_data.tellp() == 0) return {};
+        assert(is_bp_balenced(state->entry_bp));
         
         std::vector<char> bp;
 
@@ -280,11 +289,16 @@ void transform_endElement(void *user_data, const xmlChar *name) {
     };
 
     auto append_tmp_to_data = [&state, &bp, &append_stream] () {
+        assert(state->last_node_pop <= 0xFF);
+        
         if (bp.size() == 0) return;
+
+        uint8_t last_node_pop = state->last_node_pop;
 
         // set entry position in cluster
         state->pos[state->entry_id_idx_stack.back()] = (uint16_t)(state->data.tellp());
 
+        state->data.write((char*)&last_node_pop, sizeof last_node_pop);
         state->data.write((char*)bp.data(), bp.size());
         append_stream(state->tmp_data, state->data);
 
@@ -363,6 +377,10 @@ void transform_endElement(void *user_data, const xmlChar *name) {
         assert(state->tmp_data.tellp() == 0);
     };
 
+    if (state->in_entry) {
+        state->entry_bp.push_back(0);
+    }
+
     if (str_name == "body") {
         state->in_body = false;
     } else if (str_name != "entry") {
@@ -378,6 +396,8 @@ void transform_endElement(void *user_data, const xmlChar *name) {
 
             state->id_mapping[it.id()].push_back(idx);
             state->ch.clear();
+
+            ++state->last_node_pop;
         }
 
         // remove last node
@@ -392,7 +412,7 @@ void transform_endElement(void *user_data, const xmlChar *name) {
 
     bp = get_bp_for_cur_entry();
     data_size = state->data.tellp();
-    tmp_data_size = (size_t)state->tmp_data.tellp() + bp.size();
+    tmp_data_size = (size_t)state->tmp_data.tellp() + bp.size() + sizeof (uint8_t);
 
     if (data_size + tmp_data_size >= state->cluster_size) {
         write_cluster();
@@ -401,7 +421,7 @@ void transform_endElement(void *user_data, const xmlChar *name) {
     // write last cluster if not full
     if (str_name == "body") {
         data_size = state->data.tellp();
-        tmp_data_size = (size_t)state->tmp_data.tellp() + bp.size();
+        tmp_data_size = (size_t)state->tmp_data.tellp() + bp.size() + sizeof (uint8_t);
 
         write_cluster();
     } else if (bp.size()) {
@@ -447,13 +467,6 @@ int transform_input(const std::string &src, std::ostream &os, const parseState &
     // get room for header
     {
         uint32_t cnt = state.ids.size();
-
-        std::cout << "\ncnt:             " << sizeof cnt << '\n'
-                  << "ids:             " << cnt * sizeof state.ids[0] << '\n'
-                  << "pos:             " << cnt * sizeof state.pos[0] << '\n'
-                  << "cluster off idx: " << cnt * sizeof state.cluster_offset_idx[0] << '\n'
-                  << "id mapping cnt:  " << sizeof (uint32_t) << '\n'
-                  << "id mapping:      " << parse_state.id_mapping_bytes + ch_trie.num_keys() * sizeof (uint16_t) << std::endl;
 
         header_bytes += sizeof cnt;
         header_bytes += cnt * sizeof state.ids[0]; // ids
@@ -544,10 +557,6 @@ namespace CTQ {
 int write(const std::string &src, const std::string &dst, const std::vector<std::string> &paths, uint16_t cluster_size) {
     std::ofstream output;
 
-    if (!output) {
-        std::cout << "bad" << std::endl;
-        return -1;
-    }
 
     std::unique_ptr<parseState> parse_state = parse_input(src);
 
@@ -556,6 +565,11 @@ int write(const std::string &src, const std::string &dst, const std::vector<std:
     } 
 
     output = std::ofstream(dst, std::ios::binary);
+    
+    if (!output) {
+        std::cout << "bad" << std::endl;
+        return -1;
+    }
 
     // version
     {
