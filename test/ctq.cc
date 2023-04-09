@@ -14,22 +14,23 @@
 TEST_CASE("simple") {
     const std::string input_filename  = "dataset/simple.tei";
     const std::string output_filename = "dataset/simple.ctq";
-    const std::vector<std::string> keys{ "袱紗", "膨よか", "ふしだら" };
-    const std::vector<uint64_t>    ids { 1010990, 1011000, 1011010 };
+    const std::vector<std::string> keys{ "袱紗", "膨よか", "ふしだら", "嗚呼" };
+    const std::vector<uint64_t>    ids { 1010990, 1011000, 1011010, 1565440 };
     const std::vector<std::string> entries{ 
         "<entry><form type=\"k_ele\"><orth>袱紗</orth></form><form type=\"k_ele\"><orth>帛紗</orth></form><form type=\"k_ele\"><orth>服紗</orth></form><form type=\"r_ele\"><orth>ふくさ</orth></form><sense><note type=\"pos\">noun (common) (futsuumeishi)</note><cit type=\"trans\"><quote>small silk wrapper</quote></cit><cit type=\"trans\"><quote>small cloth for wiping tea utensils</quote></cit><cit type=\"trans\"><quote>crepe wrapper</quote></cit></sense></entry>",
         "<entry><form type=\"k_ele\"><orth>膨よか</orth><lbl type=\"ke_inf\">rarely-used kanji form</lbl></form><form type=\"k_ele\"><orth>脹よか</orth><lbl type=\"ke_inf\">rarely-used kanji form</lbl></form><form type=\"r_ele\"><orth>ふくよか</orth></form><sense><note type=\"pos\">adjectival nouns or quasi-adjectives (keiyodoshi)</note><note>word usually written using kana alone</note><cit type=\"trans\"><quote>plump</quote></cit><cit type=\"trans\"><quote>fleshy</quote></cit><cit type=\"trans\"><quote>well-rounded</quote></cit><cit type=\"trans\"><quote>full</quote></cit></sense><sense><note type=\"pos\">adjectival nouns or quasi-adjectives (keiyodoshi)</note><note>word usually written using kana alone</note><cit type=\"trans\"><quote>pleasant (fragrance)</quote></cit><cit type=\"trans\"><quote>rich</quote></cit></sense></entry>",
         "<entry><form type=\"r_ele\"><orth>ふしだら</orth></form><sense><note type=\"pos\">adjectival nouns or quasi-adjectives (keiyodoshi)</note><note type=\"pos\">noun (common) (futsuumeishi)</note><cit type=\"trans\"><quote>loose</quote></cit><cit type=\"trans\"><quote>immoral</quote></cit><cit type=\"trans\"><quote>dissolute</quote></cit><cit type=\"trans\"><quote>dissipated</quote></cit><cit type=\"trans\"><quote>licentious</quote></cit><cit type=\"trans\"><quote>fast</quote></cit></sense><sense><note type=\"pos\">adjectival nouns or quasi-adjectives (keiyodoshi)</note><note type=\"pos\">noun (common) (futsuumeishi)</note><cit type=\"trans\"><quote>slovenly</quote></cit><cit type=\"trans\"><quote>untidy</quote></cit><cit type=\"trans\"><quote>messy</quote></cit></sense></entry>",
+        "<entry><form type=\"k_ele\"><orth>嗚呼</orth><lbl type=\"ke_inf\">ateji (phonetic) reading</lbl></form><form type=\"k_ele\"><orth>噫</orth><lbl type=\"ke_inf\">ateji (phonetic) reading</lbl><lbl type=\"ke_inf\">rarely-used kanji form</lbl></form><form type=\"k_ele\"><orth>嗟</orth><lbl type=\"ke_inf\">search-only kanji form</lbl></form><form type=\"k_ele\"><orth>於乎</orth><lbl type=\"ke_inf\">search-only kanji form</lbl></form><form type=\"k_ele\"><orth>於戯</orth><lbl type=\"ke_inf\">search-only kanji form</lbl></form><form type=\"k_ele\"><orth>嗟乎</orth><lbl type=\"ke_inf\">search-only kanji form</lbl></form><form type=\"k_ele\"><orth>吁</orth><lbl type=\"ke_inf\">search-only kanji form</lbl></form><form type=\"r_ele\"><orth>ああ</orth><usg type=\"re_pri\">spec1</usg></form><form type=\"r_ele\"><orth>あー</orth><lbl type=\"re_nokanji\"></lbl><usg type=\"re_pri\">spec1</usg></form><form type=\"r_ele\"><orth>あぁ</orth><lbl type=\"re_inf\">search-only kana form</lbl></form><form type=\"r_ele\"><orth>アー</orth><lbl type=\"re_inf\">search-only kana form</lbl></form><form type=\"r_ele\"><orth>アア</orth><lbl type=\"re_inf\">search-only kana form</lbl></form><form type=\"r_ele\"><orth>アァ</orth><lbl type=\"re_inf\">search-only kana form</lbl></form><sense><note type=\"pos\">interjection (kandoushi)</note><note>word usually written using kana alone</note><cit type=\"trans\"><quote>ah!</quote></cit><cit type=\"trans\"><quote>oh!</quote></cit><cit type=\"trans\"><quote>alas!</quote></cit></sense><sense><note type=\"pos\">interjection (kandoushi)</note><note>word usually written using kana alone</note><cit type=\"trans\"><quote>yes</quote></cit><cit type=\"trans\"><quote>indeed</quote></cit><cit type=\"trans\"><quote>that is correct</quote></cit></sense><sense><note type=\"pos\">interjection (kandoushi)</note><note>word usually written using kana alone</note><note type=\"sense\">in exasperation</note><cit type=\"trans\"><quote>aah</quote></cit><cit type=\"trans\"><quote>gah</quote></cit><cit type=\"trans\"><quote>argh</quote></cit></sense><sense><note type=\"pos\">interjection (kandoushi)</note><note>word usually written using kana alone</note><cit type=\"trans\"><quote>hey!</quote></cit><cit type=\"trans\"><quote>yo!</quote></cit></sense><sense><note type=\"pos\">interjection (kandoushi)</note><note>word usually written using kana alone</note><cit type=\"trans\"><quote>uh huh</quote></cit><cit type=\"trans\"><quote>yeah yeah</quote></cit><cit type=\"trans\"><quote>right</quote></cit><cit type=\"trans\"><quote>rich</quote></cit></sense></entry>"
     };
     const std::vector<std::string> paths {
         "/entry/form/orth",         // find
         "/entry/sense/cit/quote",   // don't find
     };
 
-    CTQ::write(input_filename, output_filename, paths, 500);
+    CTQ::write(input_filename, output_filename, paths);
 
     SECTION("C++") {
-        CTQ::Reader reader(output_filename);
+        CTQ::Reader reader(output_filename, true);
 
         for (int i = 0; i < keys.size(); ++i) {
             // default
@@ -80,6 +81,17 @@ TEST_CASE("simple") {
             auto find = reader.find("");
 
             REQUIRE(find.size() > 0);
+        }
+
+        // filter
+        {
+            auto find = reader.find("noun", false, 0, 0, 0, "袱紗");
+            auto find2 = reader.find("noun", false, 0, 0, 0, "袱紗", 2);
+
+            REQUIRE(find.size() == 1);
+            REQUIRE(find.begin()->first == "noun (common) (futsuumeishi)");
+
+            REQUIRE(find2.size() == 0);
         }
     }
 
