@@ -32,7 +32,7 @@ endif()
 
 set(BUILD_SHARED_LIBS "${BUILD_SHARED_LIBS_SAVED}")
 
-if (BUILD_CLI)
+if (BUILD_CTQ_CLI)
     set(BUILD_CTQ_READER ON)
     set(BUILD_CTQ_WRITER ON)
 endif()
@@ -51,6 +51,7 @@ endif()
 
 if (SOURCES)
     add_library(ctq ${SOURCES})
+    message("SOURCES: ${SOURCES}")
     
     if (BUILD_CTQ_WRITER)
         target_link_libraries(ctq PUBLIC LibXml2::LibXml2)
