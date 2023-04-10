@@ -39,6 +39,7 @@ void ctq_find_ret_free(ctq_find_ret *arr);
 #include <set>
 #include <exception>
 
+#include "ctq_util.hh"
 #include "xcdat.hpp"
 
 using trie_type = xcdat::trie_8_type;
@@ -65,7 +66,7 @@ private:
     std::vector<uint64_t>                  ids;
     std::vector<uint16_t>                  pos;
     std::vector<uint32_t>                  cluster_offset_idx;
-    std::vector<std::vector<uint32_t>>     id_mapping;
+    Contiguous2dArray<uint32_t>            id_mapping;
     std::vector<uint32_t>                  cluster_offsets;
     std::map<uint64_t, std::set<uint64_t>> id_to_ch_trie; // filter support
     long                                   m_header_end;
