@@ -5,6 +5,7 @@
 #include <bitset>
 #include <string>
 #include <stack>
+#include <ctime>
 
 #include "xcdat.hpp"
 #include <lz4.h>
@@ -142,6 +143,8 @@ Reader::Reader(const std::string &filename, bool enable_filters) : input(filenam
     uint16_t xalpha_sz  = 0;
     uint32_t id_cnt     = 0;
     uint32_t id_map_cnt = 0;
+    uint32_t footer_start = 0;
+    clock_t t = clock();
 
     if (!input.good()) {
         CTQ_READER_THROW("Cannot open file");
@@ -149,9 +152,11 @@ Reader::Reader(const std::string &filename, bool enable_filters) : input(filenam
 
     // version
     {
+        clock_t t = clock();
         input.read((char*)&m_writer_version_major, sizeof m_writer_version_major);
         input.read((char*)&m_writer_version_minor, sizeof m_writer_version_minor);
         input.read((char*)&m_writer_version_patch, sizeof m_writer_version_patch);
+        std::cout << "Version read in " << (double)(clock()-t)/CLOCKS_PER_SEC << std::endl;
 
         // TODO: check supported
         std::string version = get_writer_version();
@@ -164,6 +169,7 @@ Reader::Reader(const std::string &filename, bool enable_filters) : input(filenam
 
     // read xml_alphabet
     {
+        clock_t t = clock();
         input.read((char*)&xalpha_sz, sizeof xalpha_sz);
 
         std::string s = "";
@@ -178,10 +184,16 @@ Reader::Reader(const std::string &filename, bool enable_filters) : input(filenam
 
             s += c;
         }
+        std::cout << "Xml alphabet read in " << (double)(clock()-t)/CLOCKS_PER_SEC << std::endl;
     }
 
     // read ch_trie
-    ch_trie = xcdat::load<trie_type>(input);
+    {
+        clock_t t = clock();
+        ch_trie = xcdat::load<trie_type>(input);
+        std::cout << "Ch trie read in " << (double)(clock()-t)/CLOCKS_PER_SEC << std::endl;
+    }
+
 
     // read ids and pos
     {
@@ -191,58 +203,44 @@ Reader::Reader(const std::string &filename, bool enable_filters) : input(filenam
         pos.resize(id_cnt);
         cluster_offset_idx.resize(id_cnt);
 
+        clock_t t = clock();
         input.read((char*)ids.data(), id_cnt * sizeof ids[0]);
+        std::cout << "Ids read in " << (double)(clock()-t)/CLOCKS_PER_SEC << std::endl;
+        t = clock();
         input.read((char*)pos.data(), id_cnt * sizeof pos[0]);
+        std::cout << "Pos read in " << (double)(clock()-t)/CLOCKS_PER_SEC << std::endl;
+        t = clock();
         input.read((char*)cluster_offset_idx.data(), id_cnt * sizeof cluster_offset_idx[0]);
+        std::cout << "cluster off idx read in " << (double)(clock()-t)/CLOCKS_PER_SEC << std::endl;
     }
 
-    // id_mapping
-    {
-        for (uint32_t i = 0; i < ch_trie.num_keys(); ++i) {
-            uint32_t cnt;
-            std::vector<uint32_t> indexes;
-
-            input.read((char*)&cnt, sizeof cnt);
-            indexes.resize(cnt);
-
-            input.read((char*)indexes.data(), cnt * sizeof indexes[0]);
-
-            id_mapping.push_back(indexes);
-
-            if (enable_filters) {
-                for (const auto e : indexes) {
-                    if (((e>>8) >= ids.size())) {
-                        CTQ_READER_THROW("Corrupted file");
-                    }
-
-                    uint64_t id = ids[e>>8];
-
-                    id_to_ch_trie[id];
-
-                    auto it = id_to_ch_trie.find(id);
-                    assert(it != id_to_ch_trie.end());
-
-                    it->second.insert(i);
-                }
-            }
-        }
-    }
-
+    input.read((char*)&footer_start, sizeof footer_start);
     m_header_end = input.tellg();
+
+    input.seekg(footer_start, input.beg);
+
+    // id mapping
+    {
+        clock_t t = clock();
+        id_mapping = Contiguous2dArray<uint32_t>(input);
+        std::cout << "id mapping read in " << (double)(clock()-t)/CLOCKS_PER_SEC << std::endl;
+    }
 
     // read cluster offsets
     {
         uint32_t cnt;
 
-        input.seekg(-(sizeof cnt), input.end);
+        clock_t t = clock();
         input.read((char*)&cnt, sizeof cnt);
         cluster_offsets.resize(cnt);
 
-        input.seekg(-(sizeof cnt + cnt * sizeof cluster_offsets[0]), input.end);
         input.read((char*)cluster_offsets.data(), cnt * sizeof cluster_offsets[0]);
-        input.seekg(m_header_end, input.beg);
+        std::cout << "cluster offsets read in " << (double)(clock()-t)/CLOCKS_PER_SEC << std::endl;
     }
 
+    input.seekg(m_header_end, input.beg);
+
+    std::cout << "Reader loaded in " << (double)(clock()-t)/CLOCKS_PER_SEC << std::endl;
     
     if (0) {
         for (const auto e : xml_alphabet) {
@@ -294,6 +292,8 @@ std::map<std::string, std::vector<uint64_t>> Reader::find(const std::string &key
         if (id >= id_mapping.size()) {
             CTQ_READER_THROW("Corrupted file");
         }
+
+        assert(id < id_mapping.size());
 
         for (const auto e : id_mapping[id]) {
             uint32_t id = ids[e >> 8];

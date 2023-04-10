@@ -12,6 +12,7 @@
 #include <cctype>
 #include <memory>
 #include <cmath>
+#include <cstring>
 
 #include <libxml/parser.h>
 #include "xcdat.hpp"
@@ -472,7 +473,7 @@ int transform_input(const std::string &src, std::ostream &os, const parseState &
         header_bytes += cnt * sizeof state.ids[0]; // ids
         header_bytes += cnt * sizeof state.pos[0]; // pos
         header_bytes += cnt * sizeof state.cluster_offset_idx[0]; // cluster offset idx
-        header_bytes += parse_state.id_mapping_bytes + state.id_mapping.size() * sizeof (uint32_t); // id_mappings
+        header_bytes += sizeof(uint32_t); // footer start
 
         std::vector<char> buf(header_bytes, 0);
         os.write(buf.data(), buf.size());
@@ -490,6 +491,7 @@ int transform_input(const std::string &src, std::ostream &os, const parseState &
     // write header
     {
         uint32_t cnt = state.ids.size();
+        uint32_t footer_start = cur_pos;
 
         assert(cnt == state.pos.size());
 
@@ -497,13 +499,7 @@ int transform_input(const std::string &src, std::ostream &os, const parseState &
         os.write((char*)state.ids.data(), cnt * sizeof state.ids[0]); // TODO: compress (delta + elias fano)
         os.write((char*)state.pos.data(), cnt * sizeof state.pos[0]); // TODO: compress
         os.write((char*)state.cluster_offset_idx.data(), cnt * sizeof state.cluster_offset_idx[0]); // TODO: compress
-
-        for (const auto e : state.id_mapping) {
-            uint32_t cnt = (uint32_t)e.size();
-
-            os.write((char*)&cnt, sizeof cnt);
-            os.write((char*)e.data(), cnt * sizeof e[0]);
-        }
+        os.write((char*)&footer_start, sizeof footer_start);
     }
 
     std::cout << "\nheader bytes: " << os.tellp() - start_pos << " : " << header_bytes << std::endl;
@@ -511,13 +507,16 @@ int transform_input(const std::string &src, std::ostream &os, const parseState &
 
     os.seekp(cur_pos, os.beg);
 
+    Contiguous2dArray<uint32_t> cvec(state.id_mapping);
+    cvec.save(os);
+
     // cluster offsets
     {
         uint32_t cluster_cnt = state.cluster_offsets.size();
         uint32_t bytes = cluster_cnt * sizeof state.cluster_offsets[0];
 
-        os.write((char*)state.cluster_offsets.data(), bytes);
         os.write((char*)&cluster_cnt, sizeof cluster_cnt);
+        os.write((char*)state.cluster_offsets.data(), bytes);
     }
 
     return 0;
@@ -540,7 +539,6 @@ int save_alphabets(std::ostream &os) {
 
     os.seekp(xalpha_sz, os.cur);
 
-    ch_trie_bytes = xcdat::memory_in_bytes(ch_trie);
 
     try {
         xcdat::save(ch_trie, os);
@@ -556,7 +554,6 @@ namespace CTQ {
 
 int write(const std::string &src, const std::string &dst, const std::vector<std::string> &paths, uint16_t cluster_size) {
     std::ofstream output;
-
 
     std::unique_ptr<parseState> parse_state = parse_input(src);
 
