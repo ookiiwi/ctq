@@ -395,7 +395,10 @@ void transform_endElement(void *user_data, const xmlChar *name) {
             uint8_t path_idx = get_path_idx(state->path);
             uint32_t idx = (state->entry_id_idx_stack.back() << 8) | path_idx;
 
-            state->id_mapping[it.id()].push_back(idx);
+            if (state->paths.size() == 0 || path_idx != 0) {
+                state->id_mapping[it.id()].push_back(idx);
+            }
+            
             state->ch.clear();
 
             ++state->last_node_pop;
@@ -507,7 +510,7 @@ int transform_input(const std::string &src, std::ostream &os, const parseState &
 
     os.seekp(cur_pos, os.beg);
 
-    Contiguous2dArray<uint32_t> cvec(state.id_mapping);
+    Contiguous2dArray<uint32_t> cvec(state.id_mapping, true);
     cvec.save(os);
 
     // cluster offsets
