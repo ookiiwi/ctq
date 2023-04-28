@@ -57,7 +57,7 @@ if (SOURCES)
         target_link_libraries(ctq PUBLIC LibXml2::LibXml2)
         add_definitions( -DCTQ_WRITER_VERSION_MAJOR=0 )
         add_definitions( -DCTQ_WRITER_VERSION_MINOR=0 )
-        add_definitions( -DCTQ_WRITER_VERSION_PATCH=0 )
+        add_definitions( -DCTQ_WRITER_VERSION_PATCH=1 )
     endif()
     
     if (BUILD_CTQ_READER)
