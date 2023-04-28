@@ -40,6 +40,7 @@ TEST_CASE("simple") {
     const std::vector<std::string> paths {
         "/entry/form/orth",         // find
         "/entry/sense/cit/quote",   // don't find
+        "/entry/sense/note"
     };
 
     CTQ::write(input_filename, output_filename, paths);
@@ -66,8 +67,8 @@ TEST_CASE("simple") {
 
             // path
             {
-                auto find_orth  = reader.find(keys[i], false, 0, 0, 1);
-                auto find_quote = reader.find(keys[i], false, 0, 0, 2);
+                auto find_orth  = reader.find(keys[i], 0, 0, 1);
+                auto find_quote = reader.find(keys[i], 0, 0, 2);
 
                 REQUIRE(find_orth.size() == 1);
                 REQUIRE(find_quote.size() == 0);
@@ -76,48 +77,49 @@ TEST_CASE("simple") {
 
         // range for "pleasant (fragrance)" and "plump"
         {
-            auto find1 = reader.find("p", false, 0, 1);
-            auto find2 = reader.find("p", false, 1, 1);
+            auto find1 = reader.find("p%", 0, 1);
+            auto find2 = reader.find("p%", 1, 1);
 
             REQUIRE(find1.size() == 1);
-            REQUIRE(find2.size() == 1);
-            REQUIRE(find1.begin()->first != find2.begin()->first);
+            REQUIRE(find2.size() == 0);
         }
 
-        // prefix
+        // prefix for same entry
         {
-            auto find = reader.find("p");
+            auto find = reader.find("p%");
 
-            REQUIRE(find.size() == 2);
+            REQUIRE(find.size() == 1);
         }
 
         // empty keyword
         {
             auto find = reader.find("");
 
-            REQUIRE(find.size() > 0);
+            REQUIRE(find.size() == 0);
         }
 
         // filter
-        if (0){
-            auto find = reader.find("noun", false, 0, 0, 0, "袱紗");
-            auto find2 = reader.find("noun", false, 0, 0, 0, "袱紗", 2);
+        {
+            auto find = reader.find("noun%", 0, 0, 0, "袱紗");
+            auto find2 = reader.find("noun%",  0, 0, 0, "袱紗", 2);
+            auto find3 = reader.find("noun%",  0, 0, 0, "fdsfsdsd");
 
             REQUIRE(find.size() == 1);
             REQUIRE(find.begin()->first == "noun (common) (futsuumeishi)");
 
             REQUIRE(find2.size() == 0);
+            REQUIRE(find3.size() == 0);
         }
     }
 
     SECTION("C") {
-        SKIP("");
+        //SKIP("");
         ctq_ctx *ctx = ctq_create_reader(output_filename.c_str());
 
         for (int i = 0; i < keys.size(); ++i) {
             // default
             {
-                ctq_find_ret *arr = ctq_find(ctx, keys[i].c_str(), false, 0, 0, 0);
+                ctq_find_ret *arr = ctq_find(ctx, keys[i].c_str(), 0, 0, 0, "", 0);
                 
                 REQUIRE(arr != NULL);
                 REQUIRE(std::string(arr[0].key) == keys[i]);
@@ -134,7 +136,7 @@ TEST_CASE("simple") {
         }
 
         {
-            ctq_find_ret *arr = ctq_find(ctx, "p", false, 0, 0, 0);
+            ctq_find_ret *arr = ctq_find(ctx, "p%", 0, 0, 0, "", 0);
 
             REQUIRE(arr != NULL);
 
@@ -143,11 +145,24 @@ TEST_CASE("simple") {
 
         // empty keyword
         {
-            ctq_find_ret *arr = ctq_find(ctx, "", false, 0, 0, 0);
+            ctq_find_ret *arr = ctq_find(ctx, "", 0, 0, 0, "", 0);
 
-            REQUIRE(arr != NULL);
+            REQUIRE(arr == NULL);
+        }
 
-            ctq_find_ret_free(arr);
+        // filter
+        {
+            ctq_find_ret *find  = ctq_find(ctx, "noun%", 0, 0, 0, "袱紗", 0);
+            ctq_find_ret *find2 = ctq_find(ctx, "noun%", 0, 0, 0, "袱紗", 2);
+            ctq_find_ret *find3 = ctq_find(ctx, "noun%", 0, 0, 0, "fdsfsdsd", 0);
+
+            REQUIRE(find != NULL);
+            REQUIRE(std::string(find[0].key) == "noun (common) (futsuumeishi)");
+
+            REQUIRE(find2 == NULL);
+            REQUIRE(find3 == NULL);
+
+            ctq_find_ret_free(find);
         }
 
         ctq_destroy_reader(ctx);
