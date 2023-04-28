@@ -1,7 +1,7 @@
 #ifndef CTQ_READER_H
 #define CTQ_READER_H
 
-#define CTQ_WRITER_MAX_SUPPORTED_VERSION "0.0.0"
+#define CTQ_WRITER_MAX_SUPPORTED_VERSION "0.0.1"
 #define CTQ_WRITER_MIN_SUPPORTED_VERSION "0.0.0"
 
 #ifdef __cplusplus
@@ -23,7 +23,7 @@ typedef struct {
 
 ctq_ctx      *ctq_create_reader(const char *filename);
 void          ctq_destroy_reader(ctq_ctx *ctx);
-ctq_find_ret *ctq_find(const ctq_ctx *ctx, const char *keyword, bool exact_match, size_t offset, size_t count, int path_idx);
+ctq_find_ret *ctq_find(const ctq_ctx *ctx, const char *keyword, size_t offset, size_t count, int path_idx, const char *filter, int filter_path_idx);
 char         *ctq_get (ctq_ctx *ctx, uint64_t id);
 const char   *ctq_writer_version(const ctq_ctx *ctx);
 const char   *ctq_reader_version(const ctq_ctx *ctx);
@@ -51,7 +51,7 @@ public:
     Reader(const std::string &filename, bool enable_filters = false);
     ~Reader();
 
-    std::map<std::string, std::vector<uint64_t>> find(const std::string &keyword, bool exact_match = false, size_t offset = 0, size_t count = 0, int path_idx = 0, const std::string &filter = "", int filter_path_idx = 0) const;
+    std::map<std::string, std::vector<uint64_t>> find(const std::string &keyword, size_t offset = 0, size_t count = 0, int path_idx = 0, const std::string &filter = "", int filter_path_idx = 0) const;
     std::string get(uint64_t id);
     std::string get_writer_version() const;
     std::string get_reader_version() const;
@@ -68,7 +68,6 @@ private:
     std::vector<uint32_t>                  cluster_offset_idx;
     Contiguous2dArray<uint32_t>            id_mapping;
     std::vector<uint32_t>                  cluster_offsets;
-    std::map<uint64_t, std::set<uint64_t>> id_to_ch_trie; // filter support
     long                                   m_header_end;
     uint32_t                               m_writer_version_major;
     uint32_t                               m_writer_version_minor;
