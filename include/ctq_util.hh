@@ -38,12 +38,20 @@ class Contiguous2dArray {
 public:
     Contiguous2dArray() = default;
 
-    Contiguous2dArray(const std::vector<std::vector<T>> &vec) {
+    Contiguous2dArray(const std::vector<std::vector<T>> &vec, bool makeUnique = false) {
         for (const auto e : vec) {
             unsigned start = m_arr.size();
 
-            for (unsigned i = 0; i < e.size(); ++i) {
-                m_arr.push_back(e[i]);
+            std::vector<T> v(e);
+
+            if (makeUnique) {
+                std::sort(v.begin(), v.end());
+                auto last = std::unique(v.begin(), v.end());
+                v.erase(last, v.end());
+            }
+
+            for (unsigned i = 0; i < v.size(); ++i) {
+                m_arr.push_back(v[i]);
             }
 
             assert(m_arr.size());
