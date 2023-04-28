@@ -6,6 +6,7 @@
 #include <string>
 #include <stack>
 #include <ctime>
+#include <set>
 
 #include "xcdat.hpp"
 #include <lz4.h>
@@ -41,9 +42,9 @@ void ctq_destroy_reader(ctq_ctx *ctx) {
     delete ctx;
 }
 
-ctq_find_ret *ctq_find(const ctq_ctx *ctx, const char *keyword, bool exact_match, size_t offset, size_t count, int path_idx) {
+ctq_find_ret *ctq_find(const ctq_ctx *ctx, const char *keyword, size_t offset, size_t count, int path_idx, const char *filter, int filter_path_idx) {
     try {
-        auto ret = ctx->reader.find(std::string(keyword), exact_match, offset, count, path_idx);
+        auto ret = ctx->reader.find(std::string(keyword), offset, count, path_idx, std::string(filter), filter_path_idx);
 
         if (ret.size() == 0) 
             return NULL;
@@ -268,25 +269,37 @@ Reader::~Reader() {
     }
 }
 
-std::map<std::string, std::vector<uint64_t>> Reader::find(const std::string &keyword, bool exact_match, size_t offset, size_t count, int path_idx, const std::string &filter, int filter_path_idx) const {
+std::map<std::string, std::vector<uint64_t>> Reader::find(const std::string &keyword, size_t offset, size_t count, int path_idx, const std::string &filter, int filter_path_idx) const {
+    auto is_exact_match = [](const std::string &s) {
+        auto rbeg = s.rbegin();
+
+        return (*rbeg != '%') || (*(++rbeg) == '\\');
+    };
+
+    auto clean_keyword = [] (const std::string &s, bool exact_match) {
+        if (exact_match) {
+            return s;
+        }
+
+        return std::string(s.begin(), s.end() - 1);
+    };
+
     std::map<std::string, std::vector<uint64_t>> ret;
-
-    if (filter.size() && id_to_ch_trie.size() == 0) {
-        CTQ_READER_THROW("No filter support");
-    }
+    bool exact_match = is_exact_match(keyword);
+    std::string clean_key = clean_keyword(keyword, exact_match);
     
-    auto it = ch_trie.make_predictive_iterator(keyword);
+    auto it = ch_trie.make_predictive_iterator(clean_key);
     size_t i = 0;
+    size_t id_cnt = 0;
 
-    while (it.next()) {
+    std::set<uint32_t> id_register{};
+
+    while (it.next() && (!count || id_cnt < count)) {
         std::vector<uint64_t> key_ids; 
         std::string key = it.decoded();
         uint64_t id = it.id();
-    
-        if (count && ret.size() >= count) break;
-        if (i++ < offset) continue; 
 
-        if (exact_match && key != keyword) 
+        if (exact_match && key != clean_key) 
             break;
 
         if (id >= id_mapping.size()) {
@@ -299,30 +312,38 @@ std::map<std::string, std::vector<uint64_t>> Reader::find(const std::string &key
             uint32_t id = ids[e >> 8];
             uint8_t  pidx = 7 & e;
             
-            if (!path_idx || pidx == path_idx) {
+            if ((id_register.find(id) == id_register.end()) && (!path_idx || pidx == path_idx)) {
                 bool add_id = true;
 
                 if (filter.size()) {
                     add_id = false;
 
-                    auto it = id_to_ch_trie.find(id);
-                    assert(it != id_to_ch_trie.end());
-                    uint8_t filter_pidx = 7 & it->first;
+                    bool is_filter_exact_match = is_exact_match(filter);
+                    std::string clean_filter = clean_keyword(filter, is_filter_exact_match);
+                    auto it = ch_trie.make_predictive_iterator(clean_filter);
+                    
+                    while(it.next() && !add_id && (!is_filter_exact_match || it.decoded() == clean_filter)) {
+                        uint64_t filter_id = it.id();
+                        auto mapping = id_mapping[filter_id];
 
-                    if (!filter_path_idx || filter_pidx == filter_path_idx) {
-                        for (const auto e : it->second) {
-                            std::string filter_key = ch_trie.decode(e);
-
-                            if (strncmp(filter.c_str(), filter_key.c_str(), filter.size()) == 0) {
-                                add_id = true;
-                                break;
+                        std::binary_search(mapping.begin(), mapping.end(), (((e >> 8) << 8) | filter_path_idx), [&](uint32_t i, uint32_t j) {
+                            if (!add_id) {
+                                add_id = ((i >> 8) == (j >> 8) && (filter_path_idx == 0 || (7 & i) == (7 & j)));
                             }
-                        }
+
+                            return (i < j);
+                        });
                     }
                 }
 
-                if (add_id)
-                    key_ids.push_back(id);
+                if (add_id) {
+                    id_register.insert(id);
+
+                    if (i++ >= offset) {
+                        ++id_cnt;
+                        key_ids.push_back(id);
+                    }
+                }
             }            
         }
 
