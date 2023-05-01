@@ -7,6 +7,7 @@
 #include <stack>
 #include <ctime>
 #include <set>
+#include <cstring>
 
 #include "xcdat.hpp"
 #include <lz4.h>
@@ -227,6 +228,13 @@ Reader::Reader(const std::string &filename, bool enable_filters) : input(filenam
         std::cout << "id mapping read in " << (double)(clock()-t)/CLOCKS_PER_SEC << std::endl;
     }
 
+    // paths mapping
+    {
+        clock_t t = clock();
+        paths_mapping = Contiguous2dArray<uint32_t>(input);
+        std::cout << "paths mapping read in " << (double)(clock()-t)/CLOCKS_PER_SEC << std::endl;
+    }
+
     // read cluster offsets
     {
         uint32_t cnt;
@@ -284,6 +292,13 @@ std::map<std::string, std::vector<uint64_t>> Reader::find(const std::string &key
         return std::string(s.begin(), s.end() - 1);
     };
 
+    auto check_pidx = [&](int idx, uint64_t ch_id) {
+        if (idx == 0) return true;
+        auto indexes = paths_mapping[ch_id];
+
+        return std::binary_search(indexes.begin(), indexes.end(), idx);
+    };
+
     std::map<std::string, std::vector<uint64_t>> ret;
     bool exact_match = is_exact_match(keyword);
     std::string clean_key = clean_keyword(keyword, exact_match);
@@ -297,19 +312,19 @@ std::map<std::string, std::vector<uint64_t>> Reader::find(const std::string &key
     while (it.next() && (!count || id_cnt < count)) {
         std::vector<uint64_t> key_ids; 
         std::string key = it.decoded();
-        uint64_t id = it.id();
+        uint64_t ch_id = it.id();
 
         if (exact_match && key != clean_key) 
             break;
 
-        if (id >= id_mapping.size()) {
+        if (ch_id >= id_mapping.size()) {
             CTQ_READER_THROW("Corrupted file");
         }
 
-        assert(id < id_mapping.size());
+        assert(ch_id < id_mapping.size());
 
-        for (const auto e : id_mapping[id]) {
-            uint32_t id = ids[e >> 8];
+        for (const auto e : id_mapping[ch_id]) {
+            uint64_t id = ids[e >> 8];
             uint8_t  pidx = 7 & e;
             
             if ((id_register.find(id) == id_register.end()) && (!path_idx || pidx == path_idx)) {
@@ -320,19 +335,33 @@ std::map<std::string, std::vector<uint64_t>> Reader::find(const std::string &key
 
                     bool is_filter_exact_match = is_exact_match(filter);
                     std::string clean_filter = clean_keyword(filter, is_filter_exact_match);
-                    auto it = ch_trie.make_predictive_iterator(clean_filter);
-                    
-                    while(it.next() && !add_id && (!is_filter_exact_match || it.decoded() == clean_filter)) {
-                        uint64_t filter_id = it.id();
-                        auto mapping = id_mapping[filter_id];
 
-                        std::binary_search(mapping.begin(), mapping.end(), (((e >> 8) << 8) | filter_path_idx), [&](uint32_t i, uint32_t j) {
-                            if (!add_id) {
-                                add_id = ((i >> 8) == (j >> 8) && (filter_path_idx == 0 || (7 & i) == (7 & j)));
+                    for (const auto filter_id : paths_mapping[e >> 8]) {
+                        std::string dec = ch_trie.decode(filter_id);
+
+                        if (dec.size() < clean_filter.size()) continue;
+
+                        if (is_filter_exact_match) {
+                            add_id = (clean_filter == dec);
+                        } else {
+                            add_id = (strncmp(clean_filter.c_str(), dec.c_str(), clean_filter.size()) == 0);
+                        }
+
+
+                        if (add_id) {
+                            if (filter_path_idx) {
+                                auto mapping = id_mapping[filter_id];
+                                bool foundIdForPath = std::binary_search(mapping.begin(), mapping.end(), (((e >> 8) << 8) | filter_path_idx));
+                                
+                                if (foundIdForPath) {
+                                    break;
+                                }
+                                
+                                add_id = false;
+                            } else {
+                                break;
                             }
-
-                            return (i < j);
-                        });
+                        }
                     }
                 }
 

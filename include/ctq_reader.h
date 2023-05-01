@@ -2,7 +2,7 @@
 #define CTQ_READER_H
 
 #define CTQ_WRITER_MAX_SUPPORTED_VERSION "0.0.1"
-#define CTQ_WRITER_MIN_SUPPORTED_VERSION "0.0.0"
+#define CTQ_WRITER_MIN_SUPPORTED_VERSION "0.0.1"
 
 #ifdef __cplusplus
 #include <cstdint>
@@ -67,6 +67,7 @@ private:
     std::vector<uint16_t>                  pos;
     std::vector<uint32_t>                  cluster_offset_idx;
     Contiguous2dArray<uint32_t>            id_mapping;
+    Contiguous2dArray<uint32_t>            paths_mapping;
     std::vector<uint32_t>                  cluster_offsets;
     long                                   m_header_end;
     uint32_t                               m_writer_version_major;

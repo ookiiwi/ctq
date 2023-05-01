@@ -47,7 +47,8 @@ struct transformState : public parserState {
             cluster_offset_idx(std::vector<uint32_t>(ids.size())), 
             os(os), 
             cluster_size(cluster_size), 
-            id_mapping(std::vector<std::vector<uint32_t>>(ch_trie.num_keys())) {}
+            id_mapping(std::vector<std::vector<uint32_t>>(ch_trie.num_keys())),
+            paths_mapping(std::vector<std::vector<uint32_t>>(ids.size())) {}
 
     const std::vector<uint64_t>        &ids; // sorted
     std::vector<uint16_t>              pos;
@@ -63,6 +64,7 @@ struct transformState : public parserState {
     const std::vector<std::string>     &paths; // sorted
     std::string                        path;
     int                                last_node_pop; // number of element in the last depest node
+    std::vector<std::vector<uint32_t>> paths_mapping;
 };
 
 void print_progress(parserState *state, bool end = false) {
@@ -393,10 +395,12 @@ void transform_endElement(void *user_data, const xmlChar *name) {
             state->tmp_data.write((char*)&tmp, sizeof tmp);
 
             uint8_t path_idx = get_path_idx(state->path);
-            uint32_t idx = (state->entry_id_idx_stack.back() << 8) | path_idx;
+            uint32_t entry_id_idx = state->entry_id_idx_stack.back();
+            uint32_t idx = (entry_id_idx << 8) | path_idx;
 
             if (state->paths.size() == 0 || path_idx != 0) {
                 state->id_mapping[it.id()].push_back(idx);
+                state->paths_mapping[entry_id_idx].push_back(it.id());
             }
             
             state->ch.clear();
@@ -512,6 +516,9 @@ int transform_input(const std::string &src, std::ostream &os, const parseState &
 
     Contiguous2dArray<uint32_t> cvec(state.id_mapping, true);
     cvec.save(os);
+
+    Contiguous2dArray<uint32_t> paths_mapping(state.paths_mapping, true);
+    paths_mapping.save(os);
 
     // cluster offsets
     {
