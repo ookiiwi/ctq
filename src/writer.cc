@@ -509,8 +509,7 @@ int transform_input(const std::string &src, std::ostream &os, const parseState &
         os.write((char*)&footer_start, sizeof footer_start);
     }
 
-    std::cout << "\nheader bytes: " << os.tellp() - start_pos << " : " << header_bytes << std::endl;
-    assert(os.tellp() - start_pos == header_bytes);
+    assert(static_cast<long>(os.tellp()) - start_pos == header_bytes);
 
     os.seekp(cur_pos, os.beg);
 
